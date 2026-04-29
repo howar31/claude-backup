@@ -1,5 +1,13 @@
 # claude-backup
 
+[![License](https://img.shields.io/github/license/howar31/claude-backup?style=flat-square)](LICENSE)
+[![Built for Claude Code](https://img.shields.io/badge/built%20for-Claude%20Code-D77655?style=flat-square)](https://claude.com/claude-code)
+[![Made with Bash](https://img.shields.io/badge/made%20with-bash-4EAA25?style=flat-square&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
+[![Conventional Commits](https://img.shields.io/badge/conventional%20commits-1.0.0-yellow?style=flat-square)](https://www.conventionalcommits.org)
+[![GitHub Stars](https://img.shields.io/github/stars/howar31/claude-backup?style=flat-square)](https://github.com/howar31/claude-backup/stargazers)
+[![Last Commit](https://img.shields.io/github/last-commit/howar31/claude-backup?style=flat-square)](https://github.com/howar31/claude-backup/commits/main)
+[![Open Issues](https://img.shields.io/github/issues/howar31/claude-backup?style=flat-square)](https://github.com/howar31/claude-backup/issues)
+
 Three-layer backup for a [Claude Code](https://claude.com/claude-code) config tree (`~/.claude` or equivalent), running as background launchd jobs on macOS.
 
 ```
