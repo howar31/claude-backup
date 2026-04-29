@@ -1,0 +1,12 @@
+# Drift indicator (ephemeral state, machine-local)
+.drift-status
+
+# Logs (defensive — actual logs live in $HOME/Library/Logs/claude-backup/)
+*.log
+
+# Backups from previous setup
+*.bak
+*.original.bak
+
+# OS
+.DS_Store

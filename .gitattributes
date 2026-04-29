@@ -1,0 +1,5 @@
+* text=auto eol=lf
+*.sh text eol=lf
+*.plist text eol=lf
+*.template text eol=lf
+*.md text eol=lf
