@@ -18,20 +18,29 @@ The two git branches deliberately diverge:
 - `main` retains a human-readable timeline written by the user with LLM help.
 - `backup/auto` exists purely so the off-site git history is never more than 2 hours stale, and so we never lose work to a forgotten commit.
 
-## Component Overview
+## Repository Layout
 
-| File | Role |
-|------|------|
-| `claude-backup.sh` | Unified dispatcher with subcommands `drive` / `git` / `git "<msg>" [files...]` / `status` |
-| `setup.sh` | Idempotent installer: dependency check, creates log dir, renders plist templates, loads launchd jobs |
-| `templates/claude-backup.plist.template` | rclone schedule template with `__USERNAME__` / `__SCRIPT_DIR__` / `__LOG_DIR__` placeholders |
-| `templates/claude-git-snapshot.plist.template` | git-snapshot schedule template, same placeholder set |
-| `SPEC.md` | This file — architecture for AI agents |
-| `README.md` | Human-facing intro and quick start |
-| `CLAUDE.md` | AI agent index for this repo |
-| `.drift-status` | Ephemeral flag (gitignored). Consumed by external statusline. |
+```
+claude-backup/
+├── claude-backup.sh      # Unified dispatcher: subcommands drive / git / git "<msg>" [files] / status
+├── setup.sh              # Idempotent installer: deps check, log dir, render plists, (re)load launchd jobs
+├── templates/            # launchd plist templates — placeholders __HOME__ / __USERNAME__ / __SCRIPT_DIR__ / __LOG_DIR__
+│   ├── claude-backup.plist.template         # rclone layer schedule — every 2h
+│   └── claude-git-snapshot.plist.template   # git-snapshot layer schedule — every 2h, odd hours
+├── SPEC.md               # This file — architecture spec for AI agents
+├── README.md             # Human-facing intro and quick start
+├── CLAUDE.md             # AI agent index and repo-local conventions
+├── LICENSE               # MIT
+├── .gitignore            # Ignores .drift-status, *.log, *.bak, .DS_Store
+└── .gitattributes
+```
 
-Logs live outside the repo at `$HOME/Library/Logs/claude-backup/`.
+The repo is a flat shell project — two scripts plus the `templates/` directory; all logic lives in `claude-backup.sh`.
+
+Runtime artifacts, not in version control:
+- `.drift-status` — ephemeral drift flag at the repo root, written by `cmd_git_snapshot`, consumed by the external `claude-statusline` (gitignored; see "Drift Flag Contract").
+- Logs — live at `$HOME/Library/Logs/claude-backup/`, deliberately outside the repo (see "Log Layout").
+- Rendered plists — written to `$HOME/Library/LaunchAgents/`, never symlinked back into the repo (see "Plist Templating").
 
 ## Data Flow
 
