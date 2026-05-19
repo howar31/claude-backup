@@ -19,8 +19,10 @@ Three-layer backup dispatcher: git `main` (semantic) + git `backup/auto` (auto-s
 - `setup.sh` renders templates with `sed` and writes directly to `~/Library/LaunchAgents/`. Rendered output is **not** symlinked back into the repo.
 
 ## Logs / State
-- Logs: `$HOME/Library/Logs/claude-backup/` (not in repo). Override via `CLAUDE_BACKUP_LOG_DIR` env var.
+- Machine-local config: `~/.config/claude-backup/config` (not in repo; overridable via `CLAUDE_BACKUP_CONFIG`). Single home for every non-committable value — log dir, alert recipient, SMTP creds. Sourced at startup. See SPEC.md "Machine-Local Config".
+- Logs: `$HOME/Library/Logs/claude-backup/` (not in repo). Override via `CLAUDE_BACKUP_LOG_DIR` (config file or env).
 - Drift flag: `<repo>/.drift-status` (gitignored). Consumed externally by `claude-statusline`. See SPEC.md "Drift Flag Contract".
+- Alert throttle state: `$LOG_DIR/.rclone-alert-state` and `$LOG_DIR/.git-snapshot-alert-state` (per-layer, machine-local, not in repo). See SPEC.md "Failure Alerting".
 - Never delete logs without explicit user approval.
 
 ## Doc Set

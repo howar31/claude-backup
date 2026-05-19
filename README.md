@@ -94,6 +94,38 @@ launchctl list | grep "com\.$(id -un)\.claude-"
 
 Git-snapshot ticks are offset by 1 hour from rclone to stagger I/O. Both subcommands probe network connectivity and SKIP gracefully when offline. launchd reruns missed jobs on wake.
 
+## Failure Alerting
+
+The unattended layers — rclone every 2h and the git auto-snapshot every 6h — can fail silently for days (most often an expired token). Two safeguards:
+
+- **`status` verdict** — the `[rclone]` section reports an explicit `HEALTHY` / `FAILING` / `UNKNOWN` verdict, the last successful sync and its age, and the consecutive-failure count. The `[git backup/auto]` section surfaces recent `FAIL` lines.
+- **Push alerts** — on a real failure of either layer, you get a macOS desktop notification and an email (the email includes the last 15 log lines). Alerts are throttled per layer: one when a failure streak starts, then at most once per 24h until the next success — so a multi-day outage never floods you.
+
+A `SKIP` (no network, or nothing changed) is never treated as a failure.
+
+### Configuration
+
+Everything machine-specific — log location, alert recipient, SMTP credentials — lives in one file outside the repo, `~/.config/claude-backup/config`, so nothing sensitive is ever committed. The dispatcher sources it at startup; if it is absent, built-in defaults apply.
+
+```bash
+mkdir -p ~/.config/claude-backup
+cat > ~/.config/claude-backup/config <<'EOF'
+# Logs and alert-throttle state (default: ~/Library/Logs/claude-backup)
+CLAUDE_BACKUP_LOG_DIR="$HOME/Library/Logs/claude-backup"
+
+# Failure-alert recipient (falls back to the Email: line of ~/.claude/USER.md)
+CLAUDE_BACKUP_ALERT_EMAIL="you@gmail.com"
+
+# Gmail SMTP for email alerts (C2). SMTP_PASS is an app password, not your
+# login password — create one at https://myaccount.google.com/apppasswords
+# (the account needs 2-Step Verification). Leave SMTP_PASS empty to disable
+# email alerts; the desktop notification still fires.
+CLAUDE_BACKUP_SMTP_USER="you@gmail.com"
+CLAUDE_BACKUP_SMTP_PASS=""
+EOF
+chmod 600 ~/.config/claude-backup/config
+```
+
 ## Recovery
 
 ```bash

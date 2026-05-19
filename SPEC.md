@@ -59,6 +59,10 @@ Logs live outside the repo at `$HOME/Library/Logs/claude-backup/`.
 - Excludes `.git/**` so rclone doesn't fight the git layer.
 - `--backup-dir` semantics: when a file in `latest/` is overwritten or deleted, the prior version is moved to the dated folder. New files go directly to `latest/`. If nothing changed, no snapshot files are created.
 - Remote name `gdrive:` is rclone-config-driven; user must `rclone config` once to authorize.
+- The rclone exit code is captured (not allowed to abort the function). On exit 0, an `OK: rclone sync complete` marker line is appended to the log and the alert throttle state is cleared. On non-zero exit, a `FAIL: rclone sync exited <rc>` marker is appended and `drive_alert` runs. The original exit code is then propagated as the function's return value, so launchd still records a non-zero `last exit`.
+- The `OK:` marker is the canonical last-success signal: rclone's own end-of-run stats block carries no timestamp, so without an explicit marker there is no reliable way to date the last successful sync.
+
+See "Failure Alerting" below for the `drive_alert` path.
 
 ### `claude-backup.sh git` (no arguments — auto-snapshot)
 
@@ -72,8 +76,11 @@ Diff-aware append to `backup/auto`, completely isolated from the user's working 
 6. Else: PARENT = previous `backup/auto` head, or `main` on first run.
 7. `git commit-tree NEW_TREE -p PARENT` with message `auto: <ISO timestamp>` → COMMIT.
 8. `git update-ref refs/heads/backup/auto COMMIT`.
-9. `git push origin refs/heads/backup/auto:refs/heads/backup/auto` (fast-forward; never `--force`).
+9. `git push origin refs/heads/backup/auto:refs/heads/backup/auto` (fast-forward; never `--force`). The push exit code is captured (not allowed to abort the function). On exit 0, an `OK: <sha>` marker is logged and the git-layer alert throttle state is cleared. On non-zero exit, a `FAIL: git push exited <rc>` marker is logged and `git_alert` runs.
 10. Drift flag update — see "Drift Flag Contract" below.
+11. The push exit code is propagated as the function's return value, so launchd records a non-zero `last exit` on a failed push.
+
+See "Failure Alerting" below for the `git_alert` path.
 
 Key invariants:
 - Plumbing only (`commit-tree`, `update-ref`, `write-tree`). No `checkout`, no `branch`, no `stash`, no working-tree mutation.
@@ -98,12 +105,67 @@ Compact three-layer health report. Reads only — no writes, no network. Format:
 
 ```
 [git main]            commit + ISO time + pending file count
-[git backup/auto]     last commit + recent OK/SKIP lines from git-snapshot.log
+[git backup/auto]     last commit + recent OK/SKIP/FAIL lines from git-snapshot.log
 [drift flag]          contents of FLAG file, or "synced"
-[rclone]              last activity timestamp + recent SKIPs + Transferred/Errors/Elapsed stats
+[rclone]              health verdict + last success (with age) + last activity + recent errors + recent SKIPs
 [launchd jobs]        pid / last-exit / state for both com.<user>.claude-* jobs
 [launchd errors]      contents of any non-empty launchd-*.log
 ```
+
+The `[rclone]` block computes an explicit verdict:
+- `HEALTHY` — an `OK:` marker exists and no `CRITICAL:` line has been logged since it.
+- `FAILING — <N> consecutive failure(s) since <ts>` — one or more `CRITICAL:` lines since the last `OK:` marker (or since the start of the log if none). `N` counts `CRITICAL:` lines; `<ts>` is the first such line of the current streak.
+- `UNKNOWN` — neither a success marker nor a failure has been recorded yet (e.g. a fresh install).
+
+This replaces the earlier behavior where the block only grepped for the most recent timestamped line. Because a `CRITICAL:` failure line begins with a timestamp, it was counted as "last activity" and the report looked healthy even while every sync failed — the blind spot that let a ~19-day rclone outage go unnoticed. The verdict is now derived from `OK:` / `CRITICAL:` markers, not from raw line recency.
+
+## Failure Alerting
+
+Both unattended layers — rclone (`cmd_drive`) and the git auto-snapshot (`cmd_git_snapshot`) — alert on a real failure. A benign `SKIP` (no network, or no change) returns or branches early and never reaches the alert path, so going offline is never mistaken for a failure.
+
+### Shared machinery
+
+Each layer has a thin wrapper — `drive_alert` / `git_alert` — that computes that layer's consecutive-failure count and a one-line summary, then calls the generic `backup_alert`. `backup_alert` applies the throttle and dispatches to the two channels (`alert_notify`, `alert_email`). Adding a layer is one wrapper plus a call site.
+
+### Throttle contract
+
+The unattended layers run on a timer (rclone every 2h, git-snapshot every 6h); an unattended failure recurs on every tick. Un-throttled, a multi-day outage would produce dozens of identical alerts. Per layer, the throttle:
+
+- Alerts on the **first** failure of a streak.
+- While the streak continues, re-alerts **at most once per 24h**.
+- Clears on the next success, so a fresh streak alerts again.
+
+Each layer has its own state file — `$LOG_DIR/.rclone-alert-state` and `$LOG_DIR/.git-snapshot-alert-state` — holding the epoch seconds of the last alert sent. **Absence means no active streak.** The layer's `cmd_*` deletes it on success; `backup_alert` writes it when it fires. A missing or non-numeric value is treated as `0` (alert fires).
+
+### Channels
+
+Both channels fire together, gated by the same throttle. Both are best-effort — a delivery failure is logged but never aborts the backup run.
+
+| Channel | Mechanism | Notes |
+|---------|-----------|-------|
+| C1 — desktop | `osascript -e 'display notification ...'` | OS-level banner. Body is sanitized (quotes/backslashes/newlines stripped, truncated). Subtitle names the failing layer. |
+| C2 — email | `curl` over Gmail SMTP (`smtps://smtp.gmail.com:465`) | RFC 5322 message including the **last 15 log lines** of the failing layer. Composed with LF, then every line ending is rewritten to CRLF by an `awk` pass in the send pipeline, so command substitution cannot corrupt the header/body boundary. Independent of any single CLI's account binding. |
+
+### Environment caveats (launchd)
+
+launchd jobs run with a minimal environment. C2 reads its credentials from the machine-local config file at runtime (see "Machine-Local Config" below), not from the inherited environment, so the minimal launchd `PATH`/env does not break it. The only hard dependency is `curl` (a macOS built-in). If the app password is revoked or the SMTP send otherwise fails, C2 fails silently (logged as `ALERT: failure email send failed`) — C1 and the `status` verdict remain the reliable channels.
+
+## Machine-Local Config
+
+Everything that must not enter this public repo — log location, alert recipient, SMTP credentials — lives in a single machine-local file, deliberately consolidated so nothing is scattered:
+
+- Path: `~/.config/claude-backup/config`, overridable via the `CLAUDE_BACKUP_CONFIG` environment variable.
+- Format: plain shell `KEY="value"` assignments. Should be `chmod 600` (it holds an app password).
+- The dispatcher sources it **once at startup**, before `LOG_DIR` is derived, so a custom log directory takes effect for the whole run. A malformed file does not abort the run — it logs a warning to stderr and falls back to built-in defaults.
+
+| Key | Purpose | Default if unset |
+|-----|---------|------------------|
+| `CLAUDE_BACKUP_LOG_DIR` | Directory for logs and the alert-throttle state file | `~/Library/Logs/claude-backup` |
+| `CLAUDE_BACKUP_ALERT_EMAIL` | Failure-alert recipient | Falls back to the `Email:` line of `~/.claude/USER.md` (`find_alert_email`) |
+| `CLAUDE_BACKUP_SMTP_USER` | Gmail account used to send C2 alerts | — (C2 skipped if unset) |
+| `CLAUDE_BACKUP_SMTP_PASS` | Gmail **app password** (16 chars; the account needs 2-Step Verification) | — (C2 skipped if empty) |
+
+Any key may also be supplied directly in the environment. `have_smtp_creds` gates C2: if either SMTP value is empty, C2 is skipped (logged as `ALERT: email skipped — SMTP credentials not configured`) and C1 still fires. The repo itself contains no user-specific literal — every such value is resolved at runtime from this file.
 
 ## Drift Flag Contract
 
@@ -166,12 +228,12 @@ Re-running `setup.sh` is safe: the script `bootout`s any existing job with the s
 
 ## Log Layout
 
-All logs live at `$HOME/Library/Logs/claude-backup/` (overridable via `CLAUDE_BACKUP_LOG_DIR` env var).
+All logs live at `$HOME/Library/Logs/claude-backup/` (overridable via `CLAUDE_BACKUP_LOG_DIR` — set it in the machine-local config file or the environment; see "Machine-Local Config").
 
 | File | Writer | Content |
 |------|--------|---------|
-| `rclone.log` | `cmd_drive` (rclone `--log-file`) | Full rclone INFO output, plus `SKIP: no network` lines |
-| `git-snapshot.log` | `cmd_git_snapshot` | One line per tick: `<ts> OK: <sha>` / `<ts> SKIP: no change` / `<ts> SKIP: no network`, plus push output on errors |
+| `rclone.log` | `cmd_drive` (rclone `--log-file`) | Full rclone INFO output, plus dispatcher marker lines: `SKIP: no network`, `OK: rclone sync complete`, `FAIL: rclone sync exited <rc>`, and `ALERT: ...` delivery lines |
+| `git-snapshot.log` | `cmd_git_snapshot` | One line per tick: `<ts> OK: <sha>` / `<ts> SKIP: no change` / `<ts> SKIP: no network` / `<ts> FAIL: git push exited <rc>`, plus raw push output on errors and `ALERT: ...` delivery lines |
 | `launchd-rclone.log` | launchd stdout/stderr redirect | Almost always empty; only populated on launchd-level failures |
 | `launchd-git-snapshot.log` | launchd stdout/stderr redirect | Same |
 
@@ -242,8 +304,11 @@ launchctl list | grep "com\.$(id -un)\.claude-"
 |------|--------------|---------|
 | `git` | All git layers | `xcode-select --install` |
 | `rclone` | drive layer | `brew install rclone` |
-| `curl` | Network probes | macOS built-in |
+| `curl` | Network probes; failure-alert email (C2) over Gmail SMTP | macOS built-in |
+| `osascript` | Failure-alert desktop notification (C1) | macOS built-in |
 | `gh` | (optional) GitHub CLI for repo management | `brew install gh` |
+
+C2 additionally needs a Gmail **app password** in the machine-local config file (see "Machine-Local Config"). If absent, alerting degrades gracefully to C1-only.
 
 ## Design Rationale
 
