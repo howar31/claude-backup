@@ -14,18 +14,18 @@ Three-layer backup for a [Claude Code](https://claude.com/claude-code) config tr
 ~/.claude
    |
    |--- (1) git main           --> semantic history (LLM-synthesized commits)
-   |--- (2) git backup/auto    --> append-only auto-snapshots, every 6h
+   |--- (2) git backup/auto    --> append-only auto-snapshots, every 2h
    `--- (3) rclone             --> Google Drive mirror with daily snapshots, every 2h
 ```
 
-The two git layers and the rclone layer split along a price/value axis: rclone is fast and total but has no history, git has history but is too costly for a 250MB+ tree of binary/log/db files. Splitting them is cheap and decoupled — and the two git branches deliberately diverge so `main` stays a clean human-readable timeline while `backup/auto` guarantees off-site git history is never more than 6 hours stale.
+The two git layers and the rclone layer split along a price/value axis: rclone is fast and total but has no history, git has history but is too costly for a 250MB+ tree of binary/log/db files. Splitting them is cheap and decoupled — and the two git branches deliberately diverge so `main` stays a clean human-readable timeline while `backup/auto` guarantees off-site git history is never more than 2 hours stale.
 
 ## Why three layers?
 
 | Need | Layer | How it helps |
 |------|-------|--------------|
 | "I want to read what I changed last week" | git `main` | Conventional Commits, written manually with LLM help |
-| "I never want to lose work between manual commits" | git `backup/auto` | Diff-aware snapshot every 6h, fast-forward push, plumbing-only (won't disturb your working tree) |
+| "I never want to lose work between manual commits" | git `backup/auto` | Diff-aware snapshot every 2h, fast-forward push, plumbing-only (won't disturb your working tree) |
 | "I want my conversation logs and database recoverable" | rclone | Full mirror to Google Drive, plus dated folders for changed/deleted files |
 
 ## Quick Start
@@ -90,13 +90,13 @@ launchctl list | grep "com\.$(id -un)\.claude-"
 | Job | Cadence | Subcommand |
 |-----|---------|-----------|
 | `com.<username>.claude-backup` | every 2h (00, 02, …, 22) | `drive` |
-| `com.<username>.claude-git-snapshot` | every 6h (01, 07, 13, 19) | `git` |
+| `com.<username>.claude-git-snapshot` | every 2h (01, 03, …, 23) | `git` |
 
 Git-snapshot ticks are offset by 1 hour from rclone to stagger I/O. Both subcommands probe network connectivity and SKIP gracefully when offline. launchd reruns missed jobs on wake. Each layer also holds an execution lock — if a scheduled tick fires while a manual run of the same layer is still going, it skips instead of starting a second copy.
 
 ## Failure Alerting
 
-The unattended layers — rclone every 2h and the git auto-snapshot every 6h — can fail silently for days (most often an expired token). Two safeguards:
+The unattended layers — rclone every 2h and the git auto-snapshot every 2h — can fail silently for days (most often an expired token). Two safeguards:
 
 - **`status` verdict** — the `[rclone]` section reports an explicit `HEALTHY` / `FAILING` / `UNKNOWN` verdict, the last successful sync and its age, and the consecutive-failure count. The `[git backup/auto]` section surfaces recent `FAIL` lines.
 - **Push alerts** — on a real failure of either layer, you get a macOS desktop notification and an email (the email includes the last 15 log lines). Alerts are throttled per layer: one when a failure streak starts, then at most once per 24h until the next success — so a multi-day outage never floods you.

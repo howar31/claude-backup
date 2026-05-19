@@ -84,7 +84,7 @@ render_plist() {
 }
 
 render_plist "claude-backup"      "rclone -> Google Drive, every 2h"
-render_plist "claude-git-snapshot" "git snapshot -> backup/auto, every 6h"
+render_plist "claude-git-snapshot" "git snapshot -> backup/auto, every 2h"
 
 echo
 echo "Loaded jobs:"

@@ -11,12 +11,12 @@ A three-layer backup harness for a Claude Code config tree (`~/.claude` or equiv
 | Layer | Content | Destination | Granularity | Trigger |
 |-------|---------|-------------|-------------|---------|
 | Git `main` | Semantic commits, tracked config only | `<your-config-repo>` | Per-commit | Manual (LLM-synthesized message) |
-| Git `backup/auto` | Append-only work-tree snapshots, tracked config only | Same repo, separate branch | Per-snapshot (skips if tree unchanged) | launchd every 6h |
+| Git `backup/auto` | Append-only work-tree snapshots, tracked config only | Same repo, separate branch | Per-snapshot (skips if tree unchanged) | launchd every 2h |
 | rclone | Everything in the watched tree (logs, db, caches) | `gdrive:backup/claude/` | Daily snapshots via `--backup-dir` | launchd every 2h |
 
 The two git branches deliberately diverge:
 - `main` retains a human-readable timeline written by the user with LLM help.
-- `backup/auto` exists purely so the off-site git history is never more than 6 hours stale, and so we never lose work to a forgotten commit.
+- `backup/auto` exists purely so the off-site git history is never more than 2 hours stale, and so we never lose work to a forgotten commit.
 
 ## Component Overview
 
@@ -41,7 +41,7 @@ Logs live outside the repo at `$HOME/Library/Logs/claude-backup/`.
                        +------------------+------------------+
                        |                  |                  |
             cmd_git_commit         cmd_git_snapshot      cmd_drive
-            (manual semantic)      (launchd 6h, isolated  (launchd 2h, rclone
+            (manual semantic)      (launchd 2h, isolated  (launchd 2h, rclone
                                     temp git index)        sync to Google Drive)
                        |                  |                  |
                        v                  v                  v
@@ -131,7 +131,7 @@ Each layer has a thin wrapper — `drive_alert` / `git_alert` — that computes 
 
 ### Throttle contract
 
-The unattended layers run on a timer (rclone every 2h, git-snapshot every 6h); an unattended failure recurs on every tick. Un-throttled, a multi-day outage would produce dozens of identical alerts. Per layer, the throttle:
+The unattended layers run on a timer (rclone every 2h, git-snapshot every 2h); an unattended failure recurs on every tick. Un-throttled, a multi-day outage would produce dozens of identical alerts. Per layer, the throttle:
 
 - Alerts on the **first** failure of a streak.
 - While the streak continues, re-alerts **at most once per 24h**.
@@ -192,13 +192,13 @@ The flag is the only piece of cross-repo state. Two parties touch it:
 - If `COUNT > 5 || DAYS_BEHIND > 3`: write `<COUNT> files / <DAYS_BEHIND>d behind` to `$FLAG`.
 - Else: `rm -f $FLAG`.
 
-**Cleared on:** successful manual `cmd_git_commit` push (so the statusline updates immediately, not waiting for the next 6h tick).
+**Cleared on:** successful manual `cmd_git_commit` push (so the statusline updates immediately, not waiting for the next 2h tick).
 
 **Reader (external — `claude-statusline`):**
 - Path: `~/.claude/system/backup/.drift-status` (resolves through the symlink to `<repo>/.drift-status`).
 - Behavior: if file exists, append ` · ⚠ <contents>` to the timestamp line. Same line — line count stays constant so the statusline never jumps between renders.
 
-Freshness bound: `min(6h since last snapshot tick, time since manual push)`.
+Freshness bound: `min(2h since last snapshot tick, time since manual push)`.
 
 The flag is `.gitignore`'d in this repo (machine-local ephemeral state).
 
@@ -224,7 +224,7 @@ Two jobs, registered in `$HOME/Library/LaunchAgents/`:
 | Label (rendered) | Cadence (StartCalendarInterval) | Subcommand |
 |------------------|--------------------------------|-----------|
 | `com.<username>.claude-backup` | every 2h: 00, 02, 04, 06, 08, 10, 12, 14, 16, 18, 20, 22 | `drive` |
-| `com.<username>.claude-git-snapshot` | every 6h: 01, 07, 13, 19 (offset by 1h to stagger I/O) | `git` |
+| `com.<username>.claude-git-snapshot` | every 2h: 01, 03, 05, 07, 09, 11, 13, 15, 17, 19, 21, 23 (offset by 1h to stagger I/O) | `git` |
 
 **Sleep handling:** launchd runs missed jobs on wake.
 **Network failure:** Both subcommands probe connectivity and SKIP+log gracefully.
