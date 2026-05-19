@@ -23,6 +23,7 @@ Three-layer backup dispatcher: git `main` (semantic) + git `backup/auto` (auto-s
 - Logs: `$HOME/Library/Logs/claude-backup/` (not in repo). Override via `CLAUDE_BACKUP_LOG_DIR` (config file or env).
 - Drift flag: `<repo>/.drift-status` (gitignored). Consumed externally by `claude-statusline`. See SPEC.md "Drift Flag Contract".
 - Alert throttle state: `$LOG_DIR/.rclone-alert-state` and `$LOG_DIR/.git-snapshot-alert-state` (per-layer, machine-local, not in repo). See SPEC.md "Failure Alerting".
+- Execution-lock dirs: `$LOG_DIR/.rclone.lock` and `$LOG_DIR/.git-snapshot.lock` (per-layer mutual exclusion, machine-local, not in repo). See SPEC.md "Execution Lock".
 - Never delete logs without explicit user approval.
 
 ## Doc Set

@@ -92,7 +92,7 @@ launchctl list | grep "com\.$(id -un)\.claude-"
 | `com.<username>.claude-backup` | every 2h (00, 02, …, 22) | `drive` |
 | `com.<username>.claude-git-snapshot` | every 6h (01, 07, 13, 19) | `git` |
 
-Git-snapshot ticks are offset by 1 hour from rclone to stagger I/O. Both subcommands probe network connectivity and SKIP gracefully when offline. launchd reruns missed jobs on wake.
+Git-snapshot ticks are offset by 1 hour from rclone to stagger I/O. Both subcommands probe network connectivity and SKIP gracefully when offline. launchd reruns missed jobs on wake. Each layer also holds an execution lock — if a scheduled tick fires while a manual run of the same layer is still going, it skips instead of starting a second copy.
 
 ## Failure Alerting
 

@@ -36,12 +36,61 @@ USER_NAME="$(id -un)"
 # Per-layer throttle state for failure alerting (machine-local, not in repo).
 ALERT_STATE_RCLONE="$LOG_DIR/.rclone-alert-state"
 ALERT_STATE_GIT="$LOG_DIR/.git-snapshot-alert-state"
+# Per-layer execution-lock directories (machine-local, not in repo).
+LOCK_DRIVE="$LOG_DIR/.rclone.lock"
+LOCK_GIT="$LOG_DIR/.git-snapshot.lock"
 
 # Git operations always run against the ~/.claude tree.
 cd "$HOME/.claude"
 
+# --- execution lock --------------------------------------------------------
+# A manual run and the launchd-scheduled run must not execute the same layer
+# concurrently (overlapping rclone syncs waste bandwidth and interleave the
+# log, corrupting the stats cmd_status parses). macOS ships no flock(1), so
+# the lock is a directory: mkdir is atomic and fails if the directory exists.
+# The holder PID is stored inside so a stale lock from a dead process can be
+# reclaimed automatically.
+
+# Acquire the lock for a layer. Returns 0 if acquired, 1 if a live process
+# already holds it. The caller must pair this with lock_release.
+lock_acquire() {
+  local lock_dir="$1"
+  if mkdir "$lock_dir" 2>/dev/null; then
+    echo $$ > "$lock_dir/pid"
+    return 0
+  fi
+  # Directory exists — is the holder still alive?
+  local holder
+  holder=$(cat "$lock_dir/pid" 2>/dev/null || echo "")
+  if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+    return 1   # held by a live process
+  fi
+  # Stale lock (holder gone, or pid file missing/corrupt) — reclaim it.
+  rm -rf "$lock_dir"
+  if mkdir "$lock_dir" 2>/dev/null; then
+    echo $$ > "$lock_dir/pid"
+    return 0
+  fi
+  return 1   # lost a race to reclaim — treat as held
+}
+
+# Release the lock, but only if this process owns it.
+lock_release() {
+  local lock_dir="$1" holder
+  holder=$(cat "$lock_dir/pid" 2>/dev/null || echo "")
+  if [ "$holder" = "$$" ]; then
+    rm -rf "$lock_dir"
+  fi
+}
+
 # --- drive: rclone sync to Google Drive ------------------------------------
 cmd_drive() {
+  if ! lock_acquire "$LOCK_DRIVE"; then
+    echo "$(date '+%F %T') SKIP: already running" >> "$LOG_DRIVE"
+    return 0
+  fi
+  trap 'lock_release "$LOCK_DRIVE"' RETURN
+
   if ! curl -s --max-time 5 https://www.googleapis.com > /dev/null 2>&1; then
     echo "$(date '+%F %T') SKIP: no network" >> "$LOG_DRIVE"
     return 0
@@ -214,15 +263,22 @@ find_alert_email() {
 
 # --- git (no msg): diff-aware auto-snapshot to backup/auto -----------------
 cmd_git_snapshot() {
+  if ! lock_acquire "$LOCK_GIT"; then
+    printf '%s SKIP: already running\n' "$(date '+%F %T')" >> "$LOG_GIT"
+    return 0
+  fi
+  # One RETURN trap covers both the lock and the temp index. TMP_INDEX is
+  # declared empty up front so the trap is safe to set before mktemp runs.
+  local TMP_INDEX=""
+  trap 'lock_release "$LOCK_GIT"; [ -z "$TMP_INDEX" ] || rm -f "$TMP_INDEX"' RETURN
+
   if ! curl -s --max-time 5 https://api.github.com > /dev/null 2>&1; then
     printf '%s SKIP: no network\n' "$(date '+%F %T')" >> "$LOG_GIT"
     return 0
   fi
 
   # Temp index — real .git/index is never modified.
-  local TMP_INDEX
   TMP_INDEX=$(mktemp /tmp/.claude-snapshot-index.XXXXXX)
-  trap 'rm -f "$TMP_INDEX"' RETURN
   cp .git/index "$TMP_INDEX" 2>/dev/null || true
   export GIT_INDEX_FILE="$TMP_INDEX"
 
