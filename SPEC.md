@@ -81,7 +81,7 @@ Diff-aware append to `backup/auto`, completely isolated from the user's working 
 0. Acquire the git-snapshot execution lock. If another run already holds it, log `SKIP: already running` and return 0 (see "Execution Lock").
 1. Network probe: `https://api.github.com`. SKIP+log if offline.
 2. Copy `.git/index` to `mktemp /tmp/.claude-snapshot-index.XXXXXX`. Set `GIT_INDEX_FILE` to the temp copy. The real index is never modified.
-3. `git add -A` against the temp index, excluding any embedded git repository / `git worktree` checkout (each carries its own `.git`) → `git write-tree` produces NEW_TREE. A plain `git add -A` would otherwise record such a directory as a broken gitlink and emit `warning: adding embedded git repository`.
+3. `git add -A` against the temp index via the shared `git_add_no_embedded` helper, which excludes any embedded git repository / `git worktree` checkout (each carries its own `.git`) → `git write-tree` produces NEW_TREE. A plain `git add -A` would otherwise record such a directory as a broken gitlink and emit `warning: adding embedded git repository`.
 4. Read `refs/heads/backup/auto^{tree}` as LAST_TREE.
 5. If NEW_TREE = LAST_TREE: `SKIP: no change`, return.
 6. Else: PARENT = previous `backup/auto` head, or `main` on first run.
@@ -103,7 +103,7 @@ Key invariants:
 Semantic commit on `main`.
 
 1. Refuse if HEAD is not `main` (return 1, error message).
-2. If files are passed, `git add -- <files>`. Otherwise `git add -A`.
+2. If files are passed, `git add -- <files>`. Otherwise stage the whole tree via the shared `git_add_no_embedded` helper — the same embedded-repo exclusion as the auto-snapshot (see the `git` no-arg spec, step 3), so a manual commit and an auto-snapshot behave identically.
 3. If no staged diff, print `No staged changes — nothing to commit` and return 0.
 4. `git commit -m "<msg>"` → `git push origin main`.
 5. On success, `rm -f $FLAG` so the statusline updates immediately.

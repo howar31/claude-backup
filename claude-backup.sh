@@ -261,6 +261,28 @@ find_alert_email() {
   return 1
 }
 
+# --- shared: stage the work tree, minus embedded git repos -----------------
+# `git add -A` over the whole tree, excluding any embedded git repository /
+# `git worktree` checkout not already covered by .gitignore. A plain
+# `git add -A` would record such a directory as a broken gitlink (mode 160000)
+# and emit `warning: adding embedded git repository`. Shared by both git-writing
+# paths (cmd_git_snapshot and cmd_git_commit) so a manual commit and an auto
+# snapshot behave identically. Operates on whatever index GIT_INDEX_FILE points
+# at — the temp snapshot index, or the real index for a semantic commit.
+git_add_no_embedded() {
+  local add_args=(-A -- .) embedded
+  while IFS= read -r embedded; do
+    embedded=${embedded#./}
+    embedded=${embedded%/.git}
+    [ -z "$embedded" ] && continue
+    # Repos already covered by .gitignore: git never adds them anyway, and
+    # naming an ignored path in an explicit pathspec makes `git add` error.
+    git check-ignore -q "$embedded" 2>/dev/null && continue
+    add_args+=(":(exclude)$embedded")
+  done < <(find . -path ./.git -prune -o -name .git -print -prune 2>/dev/null)
+  git add "${add_args[@]}"
+}
+
 # --- git (no msg): diff-aware auto-snapshot to backup/auto -----------------
 cmd_git_snapshot() {
   if ! lock_acquire "$LOCK_GIT"; then
@@ -282,22 +304,10 @@ cmd_git_snapshot() {
   cp .git/index "$TMP_INDEX" 2>/dev/null || true
   export GIT_INDEX_FILE="$TMP_INDEX"
 
-  # Stage the whole tree, but exclude any embedded git repository / worktree
-  # checkout. A plain `git add -A` records such a directory as a broken gitlink
-  # (mode 160000) and emits `warning: adding embedded git repository`, polluting
-  # the snapshot. Each embedded repo / `git worktree` checkout carries its own
-  # `.git` entry; the repo's own top-level `.git` is pruned explicitly.
-  local ADD_ARGS=(-A -- .) embedded
-  while IFS= read -r embedded; do
-    embedded=${embedded#./}
-    embedded=${embedded%/.git}
-    [ -z "$embedded" ] && continue
-    # Skip repos already covered by .gitignore: git never adds them anyway,
-    # and naming an ignored path in an explicit pathspec makes `git add` error.
-    git check-ignore -q "$embedded" 2>/dev/null && continue
-    ADD_ARGS+=(":(exclude)$embedded")
-  done < <(find . -path ./.git -prune -o -name .git -print -prune 2>/dev/null)
-  git add "${ADD_ARGS[@]}"
+  # Stage the work tree against the temp index (embedded git repos / worktree
+  # checkouts excluded — see git_add_no_embedded). The real .git/index is
+  # untouched: GIT_INDEX_FILE above points git at the temp copy.
+  git_add_no_embedded
   local NEW_TREE LAST_TREE PARENT COMMIT GIT_RC=0
   NEW_TREE=$(git write-tree)
   LAST_TREE=$(git rev-parse --verify -q "refs/heads/backup/auto^{tree}" 2>/dev/null || echo "")
@@ -384,7 +394,7 @@ cmd_git_commit() {
   if [ $# -gt 0 ]; then
     git add -- "$@"
   else
-    git add -A
+    git_add_no_embedded
   fi
   if git diff --cached --quiet; then
     echo "No staged changes — nothing to commit"
