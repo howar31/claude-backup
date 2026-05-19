@@ -293,9 +293,37 @@ cmd_git_snapshot() {
     PARENT=$(git rev-parse --verify -q refs/heads/backup/auto 2>/dev/null || git rev-parse main)
     COMMIT=$(printf 'auto: %s\n' "$(date '+%F %T %Z')" | git commit-tree "$NEW_TREE" -p "$PARENT")
     git update-ref refs/heads/backup/auto "$COMMIT"
-    # Capture the push outcome so a failure can be logged and alerted rather
-    # than aborting the run via set -e (which would skip the drift-flag update).
-    git push origin "refs/heads/backup/auto:refs/heads/backup/auto" >> "$LOG_GIT" 2>&1 || GIT_RC=$?
+    # Push the snapshot. The exit code is captured (not allowed to abort the
+    # run via set -e, which would skip the drift-flag update). backup/auto is
+    # normally a fast-forward; the push output is kept so a non-fast-forward
+    # divergence can be told apart from a transient failure.
+    local PUSH_OUT=""
+    PUSH_OUT=$(git push origin "refs/heads/backup/auto:refs/heads/backup/auto" 2>&1) || GIT_RC=$?
+    printf '%s\n' "$PUSH_OUT" >> "$LOG_GIT"
+
+    # Self-heal a diverged backup/auto. It is a machine-generated snapshot
+    # branch whose local tip is authoritative, so a non-fast-forward rejection
+    # (e.g. after a history rewrite of the watched repo) is recovered by
+    # re-pushing with --force-with-lease. The lease is pinned to the freshly
+    # fetched remote tip, so a concurrent push by another writer still aborts
+    # the force instead of being clobbered. Only a genuine non-fast-forward
+    # triggers this; transient errors fall through to FAIL. http.postBuffer is
+    # raised for this one command because a divergence with no common ancestor
+    # must be sent as a single large pack.
+    if [ "$GIT_RC" -ne 0 ] && printf '%s' "$PUSH_OUT" | grep -qE 'non-fast-forward|\[rejected\]'; then
+      printf '%s WARN: backup/auto diverged from origin — recovering via force-with-lease\n' "$(date '+%F %T')" >> "$LOG_GIT"
+      local REMOTE_TIP=""
+      if git fetch origin backup/auto >> "$LOG_GIT" 2>&1; then
+        REMOTE_TIP=$(git rev-parse FETCH_HEAD 2>/dev/null || echo "")
+      fi
+      if [ -n "$REMOTE_TIP" ]; then
+        GIT_RC=0
+        git -c http.postBuffer=524288000 push \
+          --force-with-lease="backup/auto:$REMOTE_TIP" \
+          origin "refs/heads/backup/auto:refs/heads/backup/auto" >> "$LOG_GIT" 2>&1 || GIT_RC=$?
+      fi
+    fi
+
     if [ "$GIT_RC" -eq 0 ]; then
       printf '%s OK: %s\n' "$(date '+%F %T')" "$COMMIT" >> "$LOG_GIT"
       rm -f "$ALERT_STATE_GIT"

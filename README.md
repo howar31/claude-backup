@@ -25,7 +25,7 @@ The two git layers and the rclone layer split along a price/value axis: rclone i
 | Need | Layer | How it helps |
 |------|-------|--------------|
 | "I want to read what I changed last week" | git `main` | Conventional Commits, written manually with LLM help |
-| "I never want to lose work between manual commits" | git `backup/auto` | Diff-aware snapshot every 2h, fast-forward push, plumbing-only (won't disturb your working tree) |
+| "I never want to lose work between manual commits" | git `backup/auto` | Diff-aware snapshot every 2h, plumbing-only push that self-heals on divergence (won't disturb your working tree) |
 | "I want my conversation logs and database recoverable" | rclone | Full mirror to Google Drive, plus dated folders for changed/deleted files |
 
 ## Quick Start

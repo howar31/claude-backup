@@ -78,7 +78,7 @@ Diff-aware append to `backup/auto`, completely isolated from the user's working 
 6. Else: PARENT = previous `backup/auto` head, or `main` on first run.
 7. `git commit-tree NEW_TREE -p PARENT` with message `auto: <ISO timestamp>` → COMMIT.
 8. `git update-ref refs/heads/backup/auto COMMIT`.
-9. `git push origin refs/heads/backup/auto:refs/heads/backup/auto` (fast-forward; never `--force`). The push exit code is captured (not allowed to abort the function). On exit 0, an `OK: <sha>` marker is logged and the git-layer alert throttle state is cleared. On non-zero exit, a `FAIL: git push exited <rc>` marker is logged and `git_alert` runs.
+9. `git push origin refs/heads/backup/auto:refs/heads/backup/auto`. Normally a fast-forward. If the push is rejected as non-fast-forward — local and remote `backup/auto` have diverged, e.g. after a history rewrite of the watched repo — the script fetches the current remote tip and retries once with `git push --force-with-lease=backup/auto:<fetched-tip>` (a `WARN:` line records the recovery). `backup/auto` is a machine-generated snapshot branch whose local tip is authoritative, so this self-heals the divergence; the lease pin still aborts the force if another writer pushed concurrently, and `http.postBuffer` is raised for that one command so a no-common-ancestor divergence can be sent as a single large pack. The push exit code is captured (not allowed to abort the function). On exit 0 — including a recovered push — an `OK: <sha>` marker is logged and the git-layer alert throttle state is cleared. On non-zero exit, a `FAIL: git push exited <rc>` marker is logged and `git_alert` runs.
 10. Drift flag update — see "Drift Flag Contract" below.
 11. The push exit code is propagated as the function's return value, so launchd records a non-zero `last exit` on a failed push.
 
@@ -87,7 +87,7 @@ See "Failure Alerting" below for the `git_alert` path.
 Key invariants:
 - Plumbing only (`commit-tree`, `update-ref`, `write-tree`). No `checkout`, no `branch`, no `stash`, no working-tree mutation.
 - Real `.git/index` untouched — whatever is staged for a manual commit stays staged.
-- Append-only push — never rewrites history on `backup/auto`.
+- Push is fast-forward in normal operation; a non-fast-forward divergence is self-healed with `--force-with-lease` (local tip authoritative). `main` history is never touched.
 
 ### `claude-backup.sh git "<msg>" [files...]`
 
@@ -249,7 +249,7 @@ All logs live at `$HOME/Library/Logs/claude-backup/` (overridable via `CLAUDE_BA
 | File | Writer | Content |
 |------|--------|---------|
 | `rclone.log` | `cmd_drive` (rclone `--log-file`) | Full rclone INFO output, plus dispatcher marker lines: `SKIP: no network`, `SKIP: already running`, `OK: rclone sync complete`, `FAIL: rclone sync exited <rc>`, and `ALERT: ...` delivery lines |
-| `git-snapshot.log` | `cmd_git_snapshot` | One line per tick: `<ts> OK: <sha>` / `<ts> SKIP: no change` / `<ts> SKIP: no network` / `<ts> SKIP: already running` / `<ts> FAIL: git push exited <rc>`, plus raw push output on errors and `ALERT: ...` delivery lines |
+| `git-snapshot.log` | `cmd_git_snapshot` | One line per tick: `<ts> OK: <sha>` / `<ts> SKIP: no change` / `<ts> SKIP: no network` / `<ts> SKIP: already running` / `<ts> FAIL: git push exited <rc>`, plus a `<ts> WARN: ... recovering via force-with-lease` line when a divergence is self-healed, raw push output on errors, and `ALERT: ...` delivery lines |
 | `launchd-rclone.log` | launchd stdout/stderr redirect | Almost always empty; only populated on launchd-level failures |
 | `launchd-git-snapshot.log` | launchd stdout/stderr redirect | Same |
 
