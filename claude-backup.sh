@@ -282,7 +282,22 @@ cmd_git_snapshot() {
   cp .git/index "$TMP_INDEX" 2>/dev/null || true
   export GIT_INDEX_FILE="$TMP_INDEX"
 
-  git add -A
+  # Stage the whole tree, but exclude any embedded git repository / worktree
+  # checkout. A plain `git add -A` records such a directory as a broken gitlink
+  # (mode 160000) and emits `warning: adding embedded git repository`, polluting
+  # the snapshot. Each embedded repo / `git worktree` checkout carries its own
+  # `.git` entry; the repo's own top-level `.git` is pruned explicitly.
+  local ADD_ARGS=(-A -- .) embedded
+  while IFS= read -r embedded; do
+    embedded=${embedded#./}
+    embedded=${embedded%/.git}
+    [ -z "$embedded" ] && continue
+    # Skip repos already covered by .gitignore: git never adds them anyway,
+    # and naming an ignored path in an explicit pathspec makes `git add` error.
+    git check-ignore -q "$embedded" 2>/dev/null && continue
+    ADD_ARGS+=(":(exclude)$embedded")
+  done < <(find . -path ./.git -prune -o -name .git -print -prune 2>/dev/null)
+  git add "${ADD_ARGS[@]}"
   local NEW_TREE LAST_TREE PARENT COMMIT GIT_RC=0
   NEW_TREE=$(git write-tree)
   LAST_TREE=$(git rev-parse --verify -q "refs/heads/backup/auto^{tree}" 2>/dev/null || echo "")
