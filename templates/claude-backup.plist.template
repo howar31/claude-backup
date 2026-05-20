@@ -6,8 +6,7 @@
     <string>com.__USERNAME__.claude-backup</string>
     <key>ProgramArguments</key>
     <array>
-        <string>__SCRIPT_DIR__/claude-backup.sh</string>
-        <string>drive</string>
+        <string>__SCRIPT_DIR__/claude-backup-drive.sh</string>
     </array>
     <key>StartCalendarInterval</key>
     <array>

@@ -150,6 +150,8 @@ rclone copy gdrive:backup/claude/latest ~/.claude-restored/
 | File | Purpose |
 |------|---------|
 | `claude-backup.sh` | Unified dispatcher (drive / git / status) |
+| `claude-backup-drive.sh` | Thin `exec` wrapper for the rclone job — distinct name in macOS Login Items UI |
+| `claude-backup-git.sh` | Thin `exec` wrapper for the git-snapshot job |
 | `setup.sh` | Idempotent installer |
 | `templates/*.plist.template` | launchd schedules with placeholders |
 | `SPEC.md` | Architecture spec for AI agents |

@@ -6,8 +6,7 @@
     <string>com.__USERNAME__.claude-git-snapshot</string>
     <key>ProgramArguments</key>
     <array>
-        <string>__SCRIPT_DIR__/claude-backup.sh</string>
-        <string>git</string>
+        <string>__SCRIPT_DIR__/claude-backup-git.sh</string>
     </array>
     <key>StartCalendarInterval</key>
     <array>

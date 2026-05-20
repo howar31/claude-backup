@@ -22,20 +22,22 @@ The two git branches deliberately diverge:
 
 ```
 claude-backup/
-├── claude-backup.sh      # Unified dispatcher: subcommands drive / git / git "<msg>" [files] / status
-├── setup.sh              # Idempotent installer: deps check, log dir, render plists, (re)load launchd jobs
-├── templates/            # launchd plist templates — placeholders __HOME__ / __USERNAME__ / __SCRIPT_DIR__ / __LOG_DIR__
+├── claude-backup.sh            # Unified dispatcher: subcommands drive / git / git "<msg>" [files] / status
+├── claude-backup-drive.sh      # Thin wrapper — execs claude-backup.sh drive (distinct launchd name; see "Plist Templating")
+├── claude-backup-git.sh        # Thin wrapper — execs claude-backup.sh git
+├── setup.sh                    # Idempotent installer: deps check, log dir, render plists, (re)load launchd jobs
+├── templates/                  # launchd plist templates — placeholders __HOME__ / __USERNAME__ / __SCRIPT_DIR__ / __LOG_DIR__
 │   ├── claude-backup.plist.template         # rclone layer schedule — every 2h
 │   └── claude-git-snapshot.plist.template   # git-snapshot layer schedule — every 2h, odd hours
-├── SPEC.md               # This file — architecture spec for AI agents
-├── README.md             # Human-facing intro and quick start
-├── CLAUDE.md             # AI agent index and repo-local conventions
-├── LICENSE               # MIT
-├── .gitignore            # Ignores .drift-status, *.log, *.bak, .DS_Store
+├── SPEC.md                     # This file — architecture spec for AI agents
+├── README.md                   # Human-facing intro and quick start
+├── CLAUDE.md                   # AI agent index and repo-local conventions
+├── LICENSE                     # MIT
+├── .gitignore                  # Ignores .drift-status, *.log, *.bak, .DS_Store
 └── .gitattributes
 ```
 
-The repo is a flat shell project — two scripts plus the `templates/` directory; all logic lives in `claude-backup.sh`.
+The repo is a flat shell project — the dispatcher, two thin per-job wrappers, the installer, and the `templates/` directory; all logic lives in `claude-backup.sh`.
 
 Runtime artifacts, not in version control:
 - `.drift-status` — ephemeral drift flag at the repo root, written by `cmd_git_snapshot`, consumed by the external `claude-statusline` (gitignored; see "Drift Flag Contract").
@@ -230,10 +232,10 @@ The dispatcher uses `SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"`, which resolve
 
 Two jobs, registered in `$HOME/Library/LaunchAgents/`:
 
-| Label (rendered) | Cadence (StartCalendarInterval) | Subcommand |
-|------------------|--------------------------------|-----------|
-| `com.<username>.claude-backup` | every 2h: 00, 02, 04, 06, 08, 10, 12, 14, 16, 18, 20, 22 | `drive` |
-| `com.<username>.claude-git-snapshot` | every 2h: 01, 03, 05, 07, 09, 11, 13, 15, 17, 19, 21, 23 (offset by 1h to stagger I/O) | `git` |
+| Label (rendered) | Cadence (StartCalendarInterval) | Wrapper → subcommand |
+|------------------|--------------------------------|----------------------|
+| `com.<username>.claude-backup` | every 2h: 00, 02, 04, 06, 08, 10, 12, 14, 16, 18, 20, 22 | `claude-backup-drive.sh` → `drive` |
+| `com.<username>.claude-git-snapshot` | every 2h: 01, 03, 05, 07, 09, 11, 13, 15, 17, 19, 21, 23 (offset by 1h to stagger I/O) | `claude-backup-git.sh` → `git` |
 
 **Sleep handling:** launchd runs missed jobs on wake.
 **Network failure:** Both subcommands probe connectivity and SKIP+log gracefully.
@@ -248,6 +250,8 @@ Templates live in `templates/*.plist.template` with placeholders:
 - `__LOG_DIR__` → `$HOME/Library/Logs/claude-backup`
 
 `setup.sh` renders templates with `sed` and writes directly to `$HOME/Library/LaunchAgents/com.<username>.<name>.plist`. The rendered plist is **not** symlinked back into the repo — it contains user-specific paths and stays under the user's `~/Library/`.
+
+Each plist's `ProgramArguments[0]` points at a per-job wrapper script (`claude-backup-drive.sh` / `claude-backup-git.sh`) rather than at `claude-backup.sh` directly. Each wrapper is a three-line `exec` of the dispatcher with the right subcommand baked in. This exists for the macOS "Login Items & Extensions" UI, which displays only the basename of `ProgramArguments[0]` — pointing both jobs at `claude-backup.sh` (with the subcommand in `ProgramArguments[1]`) would render two identical `claude-backup.sh` rows in System Settings, indistinguishable to the user. The wrappers also let `ps` / Activity Monitor identify which layer is running.
 
 Re-running `setup.sh` is safe: the script `bootout`s any existing job with the same Label before `bootstrap`-ing the freshly rendered plist.
 
